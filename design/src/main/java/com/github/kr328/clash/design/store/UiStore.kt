@@ -21,6 +21,11 @@ class UiStore(context: Context) {
         defaultValue = true
     )
 
+    var launchAutoStart: Boolean by store.boolean(
+        key = "launch_auto_start",
+        defaultValue = false
+    )
+
     var darkMode: DarkMode by store.enum(
         key = "dark_mode",
         defaultValue = DarkMode.Auto,

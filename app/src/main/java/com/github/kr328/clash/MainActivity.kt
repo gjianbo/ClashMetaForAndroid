@@ -17,6 +17,7 @@ import com.github.kr328.clash.common.util.intent
 import com.github.kr328.clash.common.util.ticker
 import com.github.kr328.clash.design.MainDesign
 import com.github.kr328.clash.design.ui.ToastDuration
+import com.github.kr328.clash.remote.StatusClient
 import com.github.kr328.clash.util.startClashService
 import com.github.kr328.clash.util.stopClashService
 import com.github.kr328.clash.util.withClash
@@ -30,12 +31,17 @@ import java.util.concurrent.TimeUnit
 import com.github.kr328.clash.design.R as DesignR
 
 class MainActivity : BaseActivity<MainDesign>() {
+    private var freshLaunch = false
+
     override suspend fun main() {
         val design = MainDesign(this)
 
         setContentDesign(design)
 
         design.fetch()
+
+        if (freshLaunch)
+            design.tryAutoStart()
 
         val ticker = ticker(TimeUnit.SECONDS.toMillis(1))
 
@@ -112,6 +118,26 @@ class MainActivity : BaseActivity<MainDesign>() {
         }
     }
 
+    private suspend fun MainDesign.tryAutoStart() {
+        if (!withContext(Dispatchers.IO) { uiStore.launchAutoStart })
+            return
+
+        // Query service state via provider: the broadcast channel may not be
+        // registered yet at this point, leaving clashRunning stale as false.
+        val running = withContext(Dispatchers.IO) {
+            StatusClient(this@MainActivity).currentProfile() != null
+        }
+        if (running)
+            return
+
+        val active = withProfile { queryActive() }
+
+        if (active == null || !active.imported)
+            return
+
+        startClash()
+    }
+
     private suspend fun MainDesign.startClash() {
         val active = withProfile { queryActive() }
 
@@ -149,6 +175,8 @@ class MainActivity : BaseActivity<MainDesign>() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        freshLaunch = savedInstanceState == null
+
         super.onCreate(savedInstanceState)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             val requestPermissionLauncher =

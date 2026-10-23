@@ -81,7 +81,7 @@ subprojects {
             }
         }
 
-        ndkVersion = "29.0.14206865"
+        ndkVersion = "30.0.16248370"
 
         compileSdkVersion(defaultConfig.targetSdk!!)
 
@@ -151,7 +151,10 @@ subprojects {
                         keystore.inputStream().use(this::load)
                     }
 
-                    storeFile = rootProject.file("release.keystore")
+                    storeFile = prop.getProperty("keystore.file")
+                        ?.takeIf { it.isNotBlank() }
+                        ?.let { rootProject.file(it) }
+                        ?: rootProject.file("release.keystore")
                     storePassword = prop.getProperty("keystore.password")!!
                     keyAlias = prop.getProperty("key.alias")!!
                     keyPassword = prop.getProperty("key.password")!!

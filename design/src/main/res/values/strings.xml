@@ -132,6 +132,9 @@
     <string name="route_system_traffic">Route System Traffic</string>
     <string name="routing_via_vpn_service">Auto routing all system traffic via VpnService</string>
 
+    <string name="auto_start_on_launch">Auto Start on Launch</string>
+    <string name="auto_start_on_launch_summary">Start proxy automatically when the app opens</string>
+
     <string name="vpn_service_options">VpnService Options</string>
     <string name="bypass_private_network">Bypass Private Network</string>
     <string name="bypass_private_network_summary">Bypass private network addresses</string>

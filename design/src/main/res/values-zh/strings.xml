@@ -65,6 +65,8 @@
     <string name="recently">近期</string>
     <string name="route_system_traffic">自动路由系统流量</string>
     <string name="routing_via_vpn_service">通过 VpnService 自动路由所有系统流量</string>
+    <string name="auto_start_on_launch">打开时自动启动</string>
+    <string name="auto_start_on_launch_summary">进入应用时自动启动代理</string>
     <string name="rule_mode">规则模式</string>
     <string name="running">运行中</string>
     <string name="settings">设置</string>

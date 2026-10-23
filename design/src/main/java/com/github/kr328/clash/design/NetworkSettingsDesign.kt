@@ -54,6 +54,13 @@ class NetworkSettingsDesign(
                 }
             }
 
+            switch(
+                value = uiStore::launchAutoStart,
+                icon = R.drawable.ic_baseline_flash_on,
+                title = R.string.auto_start_on_launch,
+                summary = R.string.auto_start_on_launch_summary,
+            )
+
             category(R.string.vpn_service_options)
 
             switch(
