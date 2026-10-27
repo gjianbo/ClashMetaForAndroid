@@ -170,6 +170,9 @@ jobs:
         env:
           FLAVOR: ${{ inputs.flavor || 'alpha' }}
           BUILD_TYPE: ${{ inputs.build_type || 'debug' }}
+          # 让 debug 变体也用 signing.properties 里的 keystore 签名，
+          # 避免 AGP 默认 debug keystore 位置不确定导致的签名漂移
+          CMFA_SIGN_DEBUG_WITH_SIGNING_PROPS: 'true'
         run: |
           set -o pipefail
           TASK=":app:assemble${FLAVOR^}${BUILD_TYPE^}"

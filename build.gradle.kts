@@ -174,6 +174,13 @@ subprojects {
             }
             named("debug") {
                 versionNameSuffix = ".debug"
+                // CI 通过该环境变量要求 debug 包也用 signing.properties 里的 keystore 签名。
+                // AGP 默认的 debug 签名走 $HOME/.android/debug.keystore，位置受环境影响不稳定；
+                // 显式指定后，CI 出的 debug 包签名固定，可直接覆盖安装之前装过的包。
+                // 本地不设该变量，行为保持不变（仍用 ~/.android/debug.keystore）。
+                if (System.getenv("CMFA_SIGN_DEBUG_WITH_SIGNING_PROPS") == "true") {
+                    signingConfigs.findByName("release")?.let { signingConfig = it }
+                }
             }
         }
 
