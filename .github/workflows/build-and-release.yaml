@@ -12,13 +12,6 @@ on:
           - alpha
           - meta
         default: alpha
-      build_type:
-        description: '构建类型（debug 与当前实机验证一致；release 体积更小但混淆未实测）'
-        type: choice
-        options:
-          - debug
-          - release
-        default: debug
       tag:
         description: 'Release 标签（留空自动生成；同名标签会覆盖更新，只保留最新包）'
         type: string
@@ -46,7 +39,7 @@ env:
 
 jobs:
   build:
-    name: Build ${{ inputs.flavor || 'alpha' }} ${{ inputs.build_type || 'debug' }}
+    name: Build ${{ inputs.flavor || 'alpha' }} release
     runs-on: ubuntu-latest
     timeout-minutes: 90
 
@@ -169,7 +162,7 @@ jobs:
         id: build
         env:
           FLAVOR: ${{ inputs.flavor || 'alpha' }}
-          BUILD_TYPE: ${{ inputs.build_type || 'debug' }}
+          BUILD_TYPE: release
           # 让 debug 变体也用 signing.properties 里的 keystore 签名，
           # 避免 AGP 默认 debug keystore 位置不确定导致的签名漂移
           CMFA_SIGN_DEBUG_WITH_SIGNING_PROPS: 'true'
@@ -183,7 +176,7 @@ jobs:
         id: collect
         run: |
           FLAVOR="${{ inputs.flavor || 'alpha' }}"
-          BUILD_TYPE="${{ inputs.build_type || 'debug' }}"
+          BUILD_TYPE="release"
           SRC="app/build/outputs/apk/${FLAVOR}/${BUILD_TYPE}"
 
           echo "产物目录: $SRC"
@@ -225,7 +218,7 @@ jobs:
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v7
         with:
-          name: cmfa-${{ inputs.flavor || 'alpha' }}-${{ inputs.build_type || 'debug' }}-${{ github.run_number }}
+          name: cmfa-${{ inputs.flavor || 'alpha' }}-release-${{ github.run_number }}
           path: out/*.apk
           if-no-files-found: error
           retention-days: 90
@@ -239,7 +232,7 @@ jobs:
             TAG="${{ github.ref_name }}"
           else
             VERSION=$(sed -n 's/^ *versionName = "\(.*\)"$/\1/p' build.gradle.kts | head -1)
-            TAG="v${VERSION}-${{ inputs.flavor || 'alpha' }}-${{ inputs.build_type || 'debug' }}"
+            TAG="v${VERSION}-${{ inputs.flavor || 'alpha' }}"
           fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "Release 标签: $TAG"
@@ -255,7 +248,7 @@ jobs:
           body: |
             由 GitHub Actions 自动构建，对应提交 `${{ github.sha }}`。
 
-            - 变体：`${{ inputs.flavor || 'alpha' }}` / `${{ inputs.build_type || 'debug' }}`
+            - 变体：`${{ inputs.flavor || 'alpha' }}` / `release`
             - 构建序号：#${{ github.run_number }}
             - universal 包含全部 ABI；`arm64-v8a` 是绝大多数手机适用的最小包
 
