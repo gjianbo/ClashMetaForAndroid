@@ -34,6 +34,8 @@ app/src/main/assets
 signing.properties
 *.keystore
 *.jks
+# 例外：CI 用的固定 debug keystore，让线上包与本地包签名一致（可直接覆盖安装）
+!.github/debug.keystore
 
 # clion cmake build
 cmake-build-*

@@ -127,17 +127,11 @@ jobs:
 
       # ---------------------------------------------------------------------
       # 签名
-      #   配置了 SIGNING_KEYSTORE_BASE64 等 secrets → 用你自己的 keystore（推荐，
-      #     签名稳定，可直接覆盖安装已有版本）
-      #   没配置 → 用 debug keystore 签，并把 keystore 缓存起来，尽量保持签名一致
+      #   1. 配置了 SIGNING_KEYSTORE_BASE64 等 secrets → 用你自己的正式 keystore
+      #   2. 否则用仓库内置的 .github/debug.keystore（= 本地开发机同一个 key）
+      #      debug keystore 本身不含机密信息（密码就是 android），放进仓库是常规做法，
+      #      好处是 CI 包与本地构建的包签名完全一致，可以直接覆盖安装。
       # ---------------------------------------------------------------------
-      - name: Restore debug keystore
-        if: ${{ env.HAS_KEYSTORE != 'true' }}
-        uses: actions/cache@v5
-        with:
-          path: ~/.android/debug.keystore
-          key: android-debug-keystore-v1
-
       - name: Prepare signing config
         env:
           SIGNING_KEYSTORE_BASE64: ${{ secrets.SIGNING_KEYSTORE_BASE64 }}
@@ -145,6 +139,8 @@ jobs:
           SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
           SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
         run: |
+          mkdir -p "$HOME/.android"
+
           if [ -n "$SIGNING_KEYSTORE_BASE64" ]; then
             echo "$SIGNING_KEYSTORE_BASE64" | base64 -d > release.keystore
             {
@@ -153,19 +149,21 @@ jobs:
               echo "key.alias=$SIGNING_KEY_ALIAS"
               echo "key.password=$SIGNING_KEY_PASSWORD"
             } > signing.properties
-            echo "✅ 使用自定义 keystore 签名"
+            echo "✅ 使用 secrets 中的正式 keystore 签名"
+          elif [ -f .github/debug.keystore ]; then
+            cp .github/debug.keystore "$HOME/.android/debug.keystore"
+            {
+              echo "keystore.file=.github/debug.keystore"
+              echo "keystore.password=android"
+              echo "key.alias=androiddebugkey"
+              echo "key.password=android"
+            } > signing.properties
+            echo "✅ 使用仓库内置 debug keystore 签名（与本地构建一致，可直接覆盖安装）"
           else
-            mkdir -p "$HOME/.android"
-            if [ ! -f "$HOME/.android/debug.keystore" ]; then
-              keytool -genkeypair -v \
-                -keystore "$HOME/.android/debug.keystore" \
-                -storepass android -keypass android \
-                -alias androiddebugkey \
-                -keyalg RSA -keysize 2048 -validity 10950 \
-                -dname "CN=Android Debug,O=Android,C=US"
-            fi
-            echo "⚠️ 未配置 SIGNING_KEYSTORE_BASE64，使用 debug keystore 签名"
+            echo "::warning::未找到任何 keystore，将回退到 runner 临时生成的 debug key（签名与本地不一致）"
           fi
+
+          keytool -list -keystore "$HOME/.android/debug.keystore" -storepass android 2>/dev/null | tail -3 || true
 
       - name: Build
         id: build
