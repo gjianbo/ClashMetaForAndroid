@@ -1,0 +1,252 @@
+name: Build and Release
+
+# 手动触发：Actions 页面 → Build and Release → Run workflow
+# 推 tag（v*）也会触发一次，tag 名直接作为 Release 标签
+on:
+  workflow_dispatch:
+    inputs:
+      flavor:
+        description: '构建变体（alpha = 独立包名 .alpha，可与官方版共存）'
+        type: choice
+        options:
+          - alpha
+          - meta
+        default: alpha
+      build_type:
+        description: '构建类型（debug 与当前实机验证一致；release 体积更小但混淆未实测）'
+        type: choice
+        options:
+          - debug
+          - release
+        default: debug
+      tag:
+        description: 'Release 标签（留空自动生成；同名标签会覆盖更新，只保留最新包）'
+        type: string
+        required: false
+        default: ''
+  push:
+    tags:
+      - 'v*'
+
+# 创建 / 更新 Release 需要写权限
+permissions:
+  contents: write
+
+# 同一分支重复触发时取消上一次，避免并发抢 Release
+concurrency:
+  group: build-and-release-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GRADLE_OPTS: '-Xmx4g -Dorg.gradle.daemon=false'
+  # 项目 build.gradle.kts 里写死的 NDK 版本
+  NDK_VERSION: '30.0.16248370'
+  # 是否配置了自定义签名 keystore（决定用 release 签名还是 fallback debug 签名）
+  HAS_KEYSTORE: ${{ secrets.SIGNING_KEYSTORE_BASE64 != '' }}
+
+jobs:
+  build:
+    name: Build ${{ inputs.flavor || 'alpha' }} ${{ inputs.build_type || 'debug' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      # mihomo 是 submodule，不初始化会让 CMake 在 exec_process(git submodule foreach ...) 处失败
+      - name: Init submodules
+        run: git submodule update --init --recursive --force
+
+      - name: Setup Java 21
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v5
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: false
+
+      # 上游用来修 Android 上 pidfd / 32 位 syscall 的问题。
+      # 打不上不算致命（本地未打这两个补丁也能正常出包运行），降级为警告继续。
+      - name: Patch Go runtime (best effort)
+        run: |
+          cd "$(go env GOROOT)"
+          shopt -s nullglob
+          for p in "$GITHUB_WORKSPACE"/.github/patch/*.patch; do
+            echo "==> $(basename "$p")"
+            patch -p1 --forward < "$p" || echo "::warning::补丁 $(basename "$p") 未能应用，继续构建"
+          done
+
+      - name: Cache Go build
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-${{ runner.os }}-${{ hashFiles('core/src/foss/golang/clash/go.sum') }}
+          restore-keys: go-${{ runner.os }}-
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install NDK and CMake
+        run: |
+          sdkmanager --install "ndk;${NDK_VERSION}" "cmake;3.22.1"
+          echo "NDK 安装位置: ${ANDROID_SDK_ROOT}/ndk/${NDK_VERSION}"
+          ls "${ANDROID_SDK_ROOT}/ndk/"
+
+      - name: Update CA bundle
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ca-certificates
+          sudo update-ca-certificates
+          cp -f /etc/ssl/certs/ca-certificates.crt \
+            core/src/foss/golang/clash/component/ca/ca-certificates.crt
+
+      # ---------------------------------------------------------------------
+      # 签名
+      #   配置了 SIGNING_KEYSTORE_BASE64 等 secrets → 用你自己的 keystore（推荐，
+      #     签名稳定，可直接覆盖安装已有版本）
+      #   没配置 → 用 debug keystore 签，并把 keystore 缓存起来，尽量保持签名一致
+      # ---------------------------------------------------------------------
+      - name: Restore debug keystore
+        if: ${{ env.HAS_KEYSTORE != 'true' }}
+        uses: actions/cache@v5
+        with:
+          path: ~/.android/debug.keystore
+          key: android-debug-keystore-v1
+
+      - name: Prepare signing config
+        env:
+          SIGNING_KEYSTORE_BASE64: ${{ secrets.SIGNING_KEYSTORE_BASE64 }}
+          SIGNING_KEYSTORE_PASSWORD: ${{ secrets.SIGNING_KEYSTORE_PASSWORD }}
+          SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
+          SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
+        run: |
+          if [ -n "$SIGNING_KEYSTORE_BASE64" ]; then
+            echo "$SIGNING_KEYSTORE_BASE64" | base64 -d > release.keystore
+            {
+              echo "keystore.file=release.keystore"
+              echo "keystore.password=$SIGNING_KEYSTORE_PASSWORD"
+              echo "key.alias=$SIGNING_KEY_ALIAS"
+              echo "key.password=$SIGNING_KEY_PASSWORD"
+            } > signing.properties
+            echo "✅ 使用自定义 keystore 签名"
+          else
+            mkdir -p "$HOME/.android"
+            if [ ! -f "$HOME/.android/debug.keystore" ]; then
+              keytool -genkeypair -v \
+                -keystore "$HOME/.android/debug.keystore" \
+                -storepass android -keypass android \
+                -alias androiddebugkey \
+                -keyalg RSA -keysize 2048 -validity 10950 \
+                -dname "CN=Android Debug,O=Android,C=US"
+            fi
+            echo "⚠️ 未配置 SIGNING_KEYSTORE_BASE64，使用 debug keystore 签名"
+          fi
+
+      - name: Build
+        id: build
+        env:
+          FLAVOR: ${{ inputs.flavor || 'alpha' }}
+          BUILD_TYPE: ${{ inputs.build_type || 'debug' }}
+        run: |
+          set -o pipefail
+          TASK=":app:assemble${FLAVOR^}${BUILD_TYPE^}"
+          echo "执行任务: $TASK"
+          ./gradlew --no-daemon --stacktrace "$TASK" 2>&1 | tee build.log
+
+      - name: Collect APKs
+        id: collect
+        run: |
+          FLAVOR="${{ inputs.flavor || 'alpha' }}"
+          BUILD_TYPE="${{ inputs.build_type || 'debug' }}"
+          SRC="app/build/outputs/apk/${FLAVOR}/${BUILD_TYPE}"
+          echo "产物目录: $SRC"
+          ls -lh "$SRC" || true
+
+          mkdir -p out
+          find "$SRC" -maxdepth 1 -name '*.apk' -exec cp {} out/ \;
+
+          # 去掉文件名里的空格，方便下载
+          for f in out/*.apk; do
+            [ -e "$f" ] || continue
+            mv "$f" "$(echo "$f" | tr ' ' '_')"
+          done
+
+          ls -lh out/
+          echo "count=$(ls out/*.apk 2>/dev/null | wc -l)" >> "$GITHUB_OUTPUT"
+
+      - name: Verify no debug-only Go tag leaked
+        run: |
+          APK=$(find out -name '*arm64-v8a*.apk' | head -1)
+          [ -n "$APK" ] || APK=$(find out -name '*.apk' | head -1)
+          unzip -p "$APK" lib/arm64-v8a/libclash.so > /tmp/libclash.so || true
+          if [ -s /tmp/libclash.so ]; then
+            COUNT=$(strings -a /tmp/libclash.so | grep -c 'leaking buffer' || true)
+            echo "libclash.so 中 'leaking buffer' 出现次数: $COUNT"
+            # debug 构建会带上 sing 的 debug 标签 → GC 时 panic("leaking buffer") 导致 VPN 消失
+            # core/build.gradle.kts 的 stripDebugTag 负责剥离该标签，这里做最后一道校验
+            if [ "$COUNT" != "0" ]; then
+              echo "::error::异常：debug 标签未被剥离，该包可能在运行一段时间后崩溃"
+              exit 1
+            fi
+          fi
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cmfa-${{ inputs.flavor || 'alpha' }}-${{ inputs.build_type || 'debug' }}-${{ github.run_number }}
+          path: out/*.apk
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Resolve release tag
+        id: meta
+        run: |
+          if [ -n "${{ inputs.tag }}" ]; then
+            TAG="${{ inputs.tag }}"
+          elif [ "${{ github.event_name }}" = "push" ]; then
+            TAG="${{ github.ref_name }}"
+          else
+            VERSION=$(sed -n 's/^ *versionName = "\(.*\)"$/\1/p' build.gradle.kts | head -1)
+            TAG="v${VERSION}-${{ inputs.flavor || 'alpha' }}-${{ inputs.build_type || 'debug' }}"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Release 标签: $TAG"
+
+      - name: Publish Release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: ${{ steps.meta.outputs.tag }} · build #${{ github.run_number }}
+          files: out/*.apk
+          prerelease: true
+          generate_release_notes: true
+          body: |
+            由 GitHub Actions 自动构建，对应提交 `${{ github.sha }}`。
+
+            - 变体：`${{ inputs.flavor || 'alpha' }}` / `${{ inputs.build_type || 'debug' }}`
+            - 构建序号：#${{ github.run_number }}
+            - universal 包含全部 ABI；`arm64-v8a` 是绝大多数手机适用的最小包
+
+      # 构建失败时把日志带出来，方便排查（GitHub 上默认日志会被截断）
+      - name: Upload build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log-${{ github.run_number }}
+          path: |
+            build.log
+            **/build/outputs/logs/**
+          if-no-files-found: ignore
+          retention-days: 15
