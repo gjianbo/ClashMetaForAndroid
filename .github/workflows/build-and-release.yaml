@@ -95,14 +95,27 @@ jobs:
           key: go-${{ runner.os }}-${{ hashFiles('core/src/foss/golang/clash/go.sum') }}
           restore-keys: go-${{ runner.os }}-
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
+      # ubuntu-latest 镜像已预装 Android SDK 与 cmdline-tools，无需 setup-android。
+      # 唯一缺的是项目写死的 NDK 版本，用 sdkmanager 补装。
       - name: Install NDK and CMake
         run: |
-          sdkmanager --install "ndk;${NDK_VERSION}" "cmake;3.22.1"
-          echo "NDK 安装位置: ${ANDROID_SDK_ROOT}/ndk/${NDK_VERSION}"
-          ls "${ANDROID_SDK_ROOT}/ndk/"
+          SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+          echo "Android SDK: $SDK"
+          export PATH="$SDK/cmdline-tools/latest/bin:$SDK/platform-tools:$PATH"
+
+          sdkmanager --version
+
+          # license 可能未完全接受，用 yes 兜住
+          yes | sdkmanager --licenses > /dev/null 2>&1 || true
+          yes | sdkmanager --install "ndk;${NDK_VERSION}" "cmake;3.22.1"
+
+          echo "已装 NDK:"
+          ls "$SDK/ndk/"
+
+          # 让后续 Gradle 与 CMake 明确知道 SDK 位置
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+          echo "$SDK/ndk/${NDK_VERSION}" >> "$GITHUB_PATH"
 
       - name: Update CA bundle
         run: |
