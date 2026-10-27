@@ -1,0 +1,141 @@
+diff --git a/adapter/outbound/tailscale.go b/adapter/outbound/tailscale.go
+index 2d487da5..c1ca5308 100644
+--- a/adapter/outbound/tailscale.go
++++ b/adapter/outbound/tailscale.go
+@@ -11,6 +11,7 @@ import (
+ 	"runtime"
+ 	"strings"
+ 	"sync"
++	"sync/atomic"
+ 	"time"
+ 
+ 	"github.com/metacubex/mihomo/component/ca"
+@@ -25,6 +26,7 @@ import (
+ 	"github.com/metacubex/tailscale/envknob"
+ 	"github.com/metacubex/tailscale/hostinfo"
+ 	"github.com/metacubex/tailscale/ipn"
++	"github.com/metacubex/tailscale/ipn/ipnstate"
+ 	"github.com/metacubex/tailscale/net/netmon"
+ 	"github.com/metacubex/tailscale/tailcfg"
+ 	"github.com/metacubex/tailscale/tsnet"
+@@ -49,6 +51,8 @@ type Tailscale struct {
+ 	serverStarted bool
+ 
+ 	unregisterDNSResolver func()
++
++	closed atomic.Bool
+ }
+ 
+ type TailscaleOption struct {
+@@ -66,9 +70,29 @@ type TailscaleOption struct {
+ 	ExitNodeAllowLANAccess *bool  `proxy:"exit-node-allow-lan-access,omitempty"`
+ }
+ 
++var tailscaleRegistry sync.Map
++
++// LookupTailscale returns a live Tailscale outbound instance, if any.
++// It lets the client query tsnet status without depending on how mihomo
++// wraps adapters internally.
++func LookupTailscale() *Tailscale {
++	var found *Tailscale
++
++	tailscaleRegistry.Range(func(_, value any) bool {
++		if ts, ok := value.(*Tailscale); ok {
++			found = ts
++
++			return false
++		}
++
++		return true
++	})
++
++	return found
++}
++
+ func init() {
+-	hostinfo.RegisterHostinfoNewHook(func(hi *tailcfg.Hostinfo) {
+-		versionDotTxt := strings.TrimSpace(ts.VersionDotTxt)
++	hostinfo.RegisterHostinfoNewHook(func(hi *tailcfg.Hostinfo) {		versionDotTxt := strings.TrimSpace(ts.VersionDotTxt)
+ 		hi.IPNVersion = fmt.Sprintf("%s-%s-%s", versionDotTxt, C.MihomoName, C.Version)
+ 	})
+ 	envknob.SetNoLogsNoSupport()
+@@ -115,6 +139,16 @@ func NewTailscale(option TailscaleOption) (*Tailscale, error) {
+ 	if _, err := buildTailscaleMaskedPrefs(option); err != nil {
+ 		return nil, err
+ 	}
++
++	// 配置重载会重复创建同名实例，而 mihomo 重建 proxies 时不会 Close 旧的。
++	// tsnet 持有 goroutine、DERP 连接与 wireguard 状态，不显式关闭会持续累积。
++	if previous, loaded := tailscaleRegistry.LoadAndDelete(option.Name); loaded {
++		if old, ok := previous.(*Tailscale); ok {
++			_ = old.Close()
++
++			log.Infoln("[Tailscale](%s) closed previous instance before rebuild", option.Name)
++		}
++	}
+ 	if option.StateDir == "" {
+ 		option.StateDir = "tailscale"
+ 	}
+@@ -180,6 +214,7 @@ func NewTailscale(option TailscaleOption) (*Tailscale, error) {
+ 	dnsTransport := tailscaleDNSTransport{tailscale: outbound}
+ 	outbound.dnsResolver = dns.NewResolverFromClient(dnsTransport)
+ 	outbound.unregisterDNSResolver = dns.RegisterTailscaleDnsClient(option.Name, dnsTransport)
++	tailscaleRegistry.Store(option.Name, outbound)
+ 	return outbound, nil
+ }
+ 
+@@ -465,7 +500,12 @@ func (t *Tailscale) IsL3Protocol(metadata *C.Metadata) bool {
+ }
+ 
+ func (t *Tailscale) Close() error {
++	if t.closed.Swap(true) {
++		return nil
++	}
++
+ 	t.cancel()
++	tailscaleRegistry.Delete(t.option.Name)
+ 	if t.unregisterDNSResolver != nil {
+ 		t.unregisterDNSResolver()
+ 	}
+@@ -477,3 +517,41 @@ func (t *Tailscale) Close() error {
+ 	}
+ 	return nil
+ }
++
++// Status reports the current tsnet state, including this node and all peers.
++// It is used by the client to render a Tailscale status page.
++func (t *Tailscale) Status(ctx context.Context) (*ipnstate.Status, error) {
++	if t.closed.Load() {
++		return nil, errors.New("tailscale outbound closed")
++	}
++
++	if err := t.ensureStarted(ctx); err != nil {
++		return nil, err
++	}
++
++	lc, err := t.server.LocalClient()
++	if err != nil {
++		return nil, err
++	}
++
++	return lc.Status(ctx)
++}
++
++// Ping sends a disco ping to the given tailnet address, reporting latency and
++// the endpoint actually used (direct vs relay).
++func (t *Tailscale) Ping(ctx context.Context, ip netip.Addr) (*ipnstate.PingResult, error) {
++	if t.closed.Load() {
++		return nil, errors.New("tailscale outbound closed")
++	}
++
++	if err := t.ensureStarted(ctx); err != nil {
++		return nil, err
++	}
++
++	lc, err := t.server.LocalClient()
++	if err != nil {
++		return nil, err
++	}
++
++	return lc.Ping(ctx, ip, tailcfg.PingDisco)
++}

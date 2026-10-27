@@ -168,6 +168,11 @@
             android:exported="false"
             android:label="@string/override" />
         <activity
+            android:name=".TailscaleStatusActivity"
+            android:configChanges="uiMode"
+            android:exported="false"
+            android:label="@string/tailscale_status" />
+        <activity
             android:name=".MetaFeatureSettingsActivity"
             android:configChanges="uiMode"
             android:exported="false"

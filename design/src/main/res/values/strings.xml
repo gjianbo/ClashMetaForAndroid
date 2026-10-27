@@ -197,6 +197,29 @@
     <string name="empty">Empty</string>
 
     <string name="enabled">Enabled</string>
+    <string name="tailscale">Tailscale</string>
+    <string name="tailscale_enable">Enable Tailscale</string>
+    <string name="tailscale_name">Proxy name</string>
+    <string name="tailscale_hostname">Device hostname</string>
+    <string name="tailscale_auth_key">Auth key</string>
+    <string name="tailscale_routes">Extra CIDR routes</string>
+    <string name="tailscale_accept_routes">Accept subnet routes</string>
+    <string name="tailscale_status">Tailscale</string>
+    <string name="tailscale_settings">Settings</string>
+    <string name="tailscale_default">Default</string>
+    <string name="tailscale_restart_hint">Changes take effect after restarting the VPN</string>
+    <string name="tailscale_probe_failed">probe failed</string>
+    <string name="tailscale_copied">Copied %s</string>
+    <string name="tailscale_refresh">Refresh</string>
+    <string name="tailscale_self">This device</string>
+    <string name="tailscale_peers">Devices</string>
+    <string name="tailscale_online">Online</string>
+    <string name="tailscale_offline">Offline</string>
+    <string name="tailscale_direct">Direct</string>
+    <string name="tailscale_relay">Relay</string>
+    <string name="tailscale_ping">Ping</string>
+    <string name="tailscale_no_peers">No other devices in this tailnet</string>
+    <string name="tailscale_not_configured">Tailscale is not configured. Enable it under Settings - Override.</string>
 
     <string name="info">Info</string>
     <string name="warning">Warning</string>

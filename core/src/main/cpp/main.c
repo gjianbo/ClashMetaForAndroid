@@ -353,6 +353,27 @@ Java_com_github_kr328_clash_core_bridge_Bridge_nativeReadOverride(JNIEnv *env, j
     return new_string(response);
 }
 
+JNIEXPORT jstring JNICALL
+Java_com_github_kr328_clash_core_bridge_Bridge_nativeQueryTailscaleStatus(JNIEnv *env, jobject thiz) {
+    TRACE_METHOD();
+
+    scoped_string response = queryTailscaleStatus();
+
+    return new_string(response);
+}
+
+JNIEXPORT jstring JNICALL
+Java_com_github_kr328_clash_core_bridge_Bridge_nativePingTailscale(JNIEnv *env, jobject thiz,
+                                                                   jstring address) {
+    TRACE_METHOD();
+
+    scoped_string _address = get_string(address);
+
+    scoped_string response = pingTailscale(_address);
+
+    return new_string(response);
+}
+
 JNIEXPORT void JNICALL
 Java_com_github_kr328_clash_core_bridge_Bridge_nativeWriteOverride(JNIEnv *env, jobject thiz,
                                                                    jint slot,

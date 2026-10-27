@@ -79,7 +79,37 @@ data class ConfigurationOverride(
 
     @SerialName("geox-url")
     val geoxurl: GeoXUrl = GeoXUrl(),
+
+    @SerialName("tailscale")
+    val tailscale: Tailscale = Tailscale(),
 ) : Parcelable {
+    @Serializable
+    data class Tailscale(
+        @SerialName("enable")
+        var enable: Boolean? = null,
+
+        @SerialName("name")
+        var name: String? = null,
+
+        @SerialName("hostname")
+        var hostname: String? = null,
+
+        @SerialName("auth-key")
+        var authKey: String? = null,
+
+        @SerialName("state-dir")
+        var stateDir: String? = null,
+
+        @SerialName("udp")
+        var udp: Boolean? = null,
+
+        @SerialName("accept-routes")
+        var acceptRoutes: Boolean? = null,
+
+        @SerialName("routes")
+        var routes: List<String>? = null,
+    )
+
     @Serializable
     data class Dns(
         @SerialName("enable")

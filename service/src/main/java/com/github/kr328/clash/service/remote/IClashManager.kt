@@ -22,5 +22,8 @@ interface IClashManager {
     fun patchOverride(slot: Clash.OverrideSlot, configuration: ConfigurationOverride)
     fun clearOverride(slot: Clash.OverrideSlot)
 
+    fun queryTailscaleStatus(): String
+    fun pingTailscale(address: String): String
+
     fun setLogObserver(observer: ILogObserver?)
 }

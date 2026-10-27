@@ -186,8 +186,17 @@ object Clash {
         }
     }
 
-    fun queryOverride(slot: OverrideSlot): ConfigurationOverride {
-        return try {
+    fun queryTailscaleStatus(): String {
+        return runCatching { Bridge.nativeQueryTailscaleStatus() }
+            .getOrElse { """{"found":false,"error":"native call failed"}""" }
+    }
+
+    fun pingTailscale(address: String): String {
+        return runCatching { Bridge.nativePingTailscale(address) }
+            .getOrElse { """{"err":"native call failed"}""" }
+    }
+
+    fun queryOverride(slot: OverrideSlot): ConfigurationOverride {        return try {
             ConfigurationOverrideJson.decodeFromString(
                 ConfigurationOverride.serializer(),
                 Bridge.nativeReadOverride(slot.ordinal)

@@ -68,6 +68,14 @@ class ClashManager(private val context: Context) : IClashManager,
         Clash.clearOverride(slot)
     }
 
+    override fun queryTailscaleStatus(): String {
+        return Clash.queryTailscaleStatus()
+    }
+
+    override fun pingTailscale(address: String): String {
+        return Clash.pingTailscale(address)
+    }
+
     override suspend fun healthCheck(group: String) {
         return Clash.healthCheck(group).await()
     }
