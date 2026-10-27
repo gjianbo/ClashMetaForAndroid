@@ -184,20 +184,26 @@ jobs:
           FLAVOR="${{ inputs.flavor || 'alpha' }}"
           BUILD_TYPE="${{ inputs.build_type || 'debug' }}"
           SRC="app/build/outputs/apk/${FLAVOR}/${BUILD_TYPE}"
+
           echo "产物目录: $SRC"
-          ls -lh "$SRC" || true
+          ls -lh "$SRC"
 
           mkdir -p out
-          find "$SRC" -maxdepth 1 -name '*.apk' -exec cp {} out/ \;
-
-          # 去掉文件名里的空格，方便下载
-          for f in out/*.apk; do
-            [ -e "$f" ] || continue
-            mv "$f" "$(echo "$f" | tr ' ' '_')"
-          done
+          find "$SRC" -maxdepth 1 -name '*.apk' -print0 |
+            while IFS= read -r -d '' f; do
+              name=$(basename "$f" | tr ' ' '_')
+              cp -f "$f" "out/$name"
+              echo "收集: $name"
+            done
 
           ls -lh out/
-          echo "count=$(ls out/*.apk 2>/dev/null | wc -l)" >> "$GITHUB_OUTPUT"
+
+          COUNT=$(find out -maxdepth 1 -name '*.apk' | wc -l | tr -d ' ')
+          echo "count=$COUNT" >> "$GITHUB_OUTPUT"
+          if [ "$COUNT" -eq 0 ]; then
+            echo "::error::构建目录里没有 APK"
+            exit 1
+          fi
 
       - name: Verify no debug-only Go tag leaked
         run: |
@@ -216,7 +222,7 @@ jobs:
           fi
 
       - name: Upload workflow artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: cmfa-${{ inputs.flavor || 'alpha' }}-${{ inputs.build_type || 'debug' }}-${{ github.run_number }}
           path: out/*.apk
@@ -255,7 +261,7 @@ jobs:
       # 构建失败时把日志带出来，方便排查（GitHub 上默认日志会被截断）
       - name: Upload build log on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: build-log-${{ github.run_number }}
           path: |
