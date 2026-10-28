@@ -3,6 +3,7 @@ package com.github.kr328.clash
 import android.content.pm.PackageManager
 import com.github.kr328.clash.common.compat.getDrawableCompat
 import com.github.kr328.clash.common.constants.Metadata
+import com.github.kr328.clash.common.util.intent
 import com.github.kr328.clash.core.Clash
 import com.github.kr328.clash.design.OverrideSettingsDesign
 import com.github.kr328.clash.design.model.AppInfo
@@ -21,6 +22,13 @@ class OverrideSettingsActivity : BaseActivity<OverrideSettingsDesign>() {
 
         defer {
             withClash {
+                // 「自定义规则」子页面写的是同一份 override，这里写回前先取它的最新值，
+                // 否则退出本页会把子页刚保存的 prepend-rules 覆盖回打开时的旧值。
+                runCatching {
+                    configuration.prependRules =
+                        queryOverride(Clash.OverrideSlot.Persist).prependRules
+                }
+
                 patchOverride(Clash.OverrideSlot.Persist, configuration)
             }
         }
@@ -49,6 +57,9 @@ class OverrideSettingsActivity : BaseActivity<OverrideSettingsDesign>() {
 
                                 finish()
                             }
+                        }
+                        OverrideSettingsDesign.Request.EditCustomRules -> {
+                            startActivity(CustomRulesActivity::class.intent)
                         }
                     }
                 }

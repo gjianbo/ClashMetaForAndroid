@@ -22,7 +22,9 @@ class AppSettingsDesign(
     onHideIconChange: (hide: Boolean) -> Unit,
 ) : Design<AppSettingsDesign.Request>(context) {
     enum class Request {
-        ReCreateAllActivities
+        ReCreateAllActivities,
+        ExportBackup,
+        ImportBackup,
     }
 
     private val binding = DesignSettingsCommonBinding
@@ -97,6 +99,28 @@ class AppSettingsDesign(
                 summary = R.string.show_traffic_summary
             ) {
                 enabled = !running
+            }
+
+            category(R.string.backup)
+
+            clickable(
+                title = R.string.backup_export,
+                icon = R.drawable.ic_baseline_save,
+                summary = R.string.backup_export_summary,
+            ) {
+                clicked {
+                    requests.trySend(Request.ExportBackup)
+                }
+            }
+
+            clickable(
+                title = R.string.backup_import,
+                icon = R.drawable.ic_baseline_restore,
+                summary = R.string.backup_import_summary,
+            ) {
+                clicked {
+                    requests.trySend(Request.ImportBackup)
+                }
             }
         }
 

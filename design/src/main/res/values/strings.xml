@@ -347,6 +347,49 @@
     <string name="tcp_concurrent">TCP Concurrent</string>
     <string name="find_process_mode">Find Process Mode</string>
 
+    <string name="custom_rules">Custom Rules</string>
+    <string name="custom_rules_summary">Prepend to rules of every profile</string>
+    <string name="custom_rules_count">%1$d rule(s) active</string>
+    <string name="custom_rules_hint">One rule per line, e.g. PROCESS-NAME,com.example.app,Proxy</string>
+    <string name="custom_rules_empty">No rules yet. Tap + to add one.</string>
+    <string name="custom_rule_add">Add rule</string>
+    <string name="custom_rule_unsupported">This rule was written by hand and cannot be edited here</string>
+
+    <string name="rule_field_type">Match by</string>
+    <string name="rule_field_payload">Value</string>
+    <string name="rule_field_target">Target</string>
+    <string name="rule_payload_pick_app">Tap to choose an app</string>
+    <string name="rule_payload_empty">Value cannot be empty</string>
+    <string name="rule_type_domain">Domain</string>
+    <string name="rule_type_domain_suffix">Domain suffix</string>
+    <string name="rule_type_domain_keyword">Domain keyword</string>
+    <string name="rule_type_process_name">Application</string>
+    <string name="rule_type_ip_cidr">IP CIDR</string>
+    <string name="rule_target_auto">AUTO · follow current profile</string>
+    <string name="rule_target_auto_short">Auto</string>
+    <string name="rule_target_direct">DIRECT · bypass proxy</string>
+    <string name="rule_target_reject">REJECT · block</string>
+    <string name="rule_target_global">GLOBAL · global selector</string>
+    <string name="rule_target_custom">Enter manually…</string>
+
+    <string name="backup">Backup &amp; restore</string>
+    <string name="backup_export">Export to local file</string>
+    <string name="backup_export_summary">Override settings, custom rules, per-app configuration</string>
+    <string name="backup_import">Restore from local file</string>
+    <string name="backup_import_summary">Pick a .json file exported earlier</string>
+    <string name="backup_export_success">Backup saved</string>
+    <string name="backup_export_failed">Failed to save backup</string>
+    <string name="backup_import_success">Restored. Restart the proxy to apply.</string>
+    <string name="backup_import_restoring">Restoring subscriptions…</string>
+    <string name="backup_import_success_count">Restored, %1$d subscription(s) re-downloaded</string>
+    <string name="backup_import_failed">Restore failed: invalid backup file</string>
+
+
+    <string name="access_control_route">Outbound Policy</string>
+    <string name="access_control_route_hint">Policy group name, leave empty to follow rules</string>
+    <string name="access_control_route_follow_rules">Follow rules</string>
+    <string name="app_route_summary">%1$s → %2$s</string>
+
     <string name="sniffer_setting">Sniffer Setting</string>
     <string name="sniffer">Sniffer</string>
     <string name="force_dns_mapping">Force DNS Mapping</string>

@@ -43,10 +43,10 @@
                 android:textAppearance="@style/TextAppearance.MaterialComponents.Body1" />
 
             <TextView
+                android:id="@+id/route_view"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="@dimen/item_text_margin"
-                android:text="@{app.packageName}"
                 android:textAppearance="@style/TextAppearance.MaterialComponents.Body2" />
         </LinearLayout>
 

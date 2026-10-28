@@ -168,6 +168,11 @@
             android:exported="false"
             android:label="@string/override" />
         <activity
+            android:name=".CustomRulesActivity"
+            android:configChanges="uiMode"
+            android:exported="false"
+            android:label="@string/custom_rules" />
+        <activity
             android:name=".TailscaleStatusActivity"
             android:configChanges="uiMode"
             android:exported="false"

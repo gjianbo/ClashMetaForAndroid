@@ -20,6 +20,30 @@ class ConfigurationModule(service: Service) : Module<ConfigurationModule.LoadExc
     private val store = ServiceStore(service)
     private val reload = Channel<Unit>(Channel.CONFLATED)
 
+    /**
+     * 把「按应用上网」里配置的出口策略组翻译成 PROCESS-NAME 规则，写进 session override。
+     *
+     * 之所以走 session 而不是 persist：这些规则是每次启动按当前勾选的包重新算出来的，
+     * 存盘没有意义，而 persist slot 属于用户在「覆写」页面手写的内容。
+     * 内核侧会把两个 slot 的 prepend-rules 合并后前置到 profile 的规则之前。
+     */
+    private fun applyAccessControlRoutes() {
+        val packages = store.accessControlPackages
+        val routes = store.accessControlRoutes.orEmpty()
+            .filterKeys { it in packages }
+        val rules = routes.map { (packageName, group) -> "PROCESS-NAME,$packageName,$group" }
+
+        val session = Clash.queryOverride(Clash.OverrideSlot.Session)
+        if (session.prependRules == rules.ifEmpty { null }) {
+            return
+        }
+
+        Clash.patchOverride(
+            Clash.OverrideSlot.Session,
+            session.copy(prependRules = rules.ifEmpty { null })
+        )
+    }
+
     override suspend fun run() {
         val broadcasts = receiveBroadcast {
             addAction(Intents.ACTION_PROFILE_CHANGED)
@@ -56,6 +80,8 @@ class ConfigurationModule(service: Service) : Module<ConfigurationModule.LoadExc
                     ?: throw NullPointerException("No profile selected")
 
                 Clash.setAgeSecretKey(active.ageSecretKey?.takeIf { it.isNotBlank() })
+
+                applyAccessControlRoutes()
 
                 Clash.load(service.importedDir.resolve(active.uuid.toString())).await()
 

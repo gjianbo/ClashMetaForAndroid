@@ -13,16 +13,18 @@ import com.github.kr328.clash.design.preference.*
 import com.github.kr328.clash.design.util.*
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlin.coroutines.resume
 
 class OverrideSettingsDesign(
     context: Context,
-    configuration: ConfigurationOverride
+    private val configuration: ConfigurationOverride
 ) : Design<OverrideSettingsDesign.Request>(context) {
     enum class Request {
-        ResetOverride
+        ResetOverride,
+        EditCustomRules,
     }
 
     private val binding = DesignSettingsOverideBinding
@@ -51,6 +53,14 @@ class OverrideSettingsDesign(
         }
     }
 
+    private fun summarizeRules(rules: List<String>): CharSequence {
+        return if (rules.isEmpty()) {
+            context.getText(R.string.custom_rules_summary)
+        } else {
+            context.getString(R.string.custom_rules_count, rules.size)
+        }
+    }
+
     init {
         binding.self = this
 
@@ -71,6 +81,17 @@ class OverrideSettingsDesign(
 
         val screen = preferenceScreen(context) {
             category(R.string.general)
+
+            val customRules = clickable(
+                title = R.string.custom_rules,
+                summary = R.string.custom_rules_summary,
+            )
+
+            customRules.clicked {
+                requests.trySend(Request.EditCustomRules)
+            }
+
+            customRules.summary = summarizeRules(configuration.prependRules.orEmpty())
 
             editableText(
                 value = configuration::httpPort,

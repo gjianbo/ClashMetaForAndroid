@@ -268,6 +268,48 @@
     <string name="geodata_mode">Geodata 模式</string>
     <string name="tcp_concurrent">TCP 并发</string>
     <string name="find_process_mode">查找进程模式</string>
+    <string name="custom_rules">自定义规则</string>
+    <string name="custom_rules_summary">追加到所有配置文件的规则最前面</string>
+    <string name="custom_rules_count">已启用 %1$d 条规则</string>
+    <string name="custom_rules_hint">每行一条规则，例如 PROCESS-NAME,com.example.app,节点选择</string>
+    <string name="custom_rules_empty">还没有规则，点右上角 + 添加</string>
+    <string name="custom_rule_add">添加规则</string>
+    <string name="custom_rule_unsupported">这条是手写的复杂规则，无法在此编辑，可删除后重建</string>
+
+    <string name="rule_field_type">匹配方式</string>
+    <string name="rule_field_payload">匹配内容</string>
+    <string name="rule_field_target">交给谁处理</string>
+    <string name="rule_payload_pick_app">点此处选择应用</string>
+    <string name="rule_payload_empty">匹配内容不能为空</string>
+    <string name="rule_type_domain">域名完全匹配</string>
+    <string name="rule_type_domain_suffix">域名后缀</string>
+    <string name="rule_type_domain_keyword">域名关键字</string>
+    <string name="rule_type_process_name">应用</string>
+    <string name="rule_type_ip_cidr">IP 段</string>
+    <string name="rule_target_auto">AUTO · 跟随当前订阅</string>
+    <string name="rule_target_auto_short">自动</string>
+    <string name="rule_target_direct">DIRECT · 直连不走代理</string>
+    <string name="rule_target_reject">REJECT · 直接拒绝</string>
+    <string name="rule_target_global">GLOBAL · 全局选择器</string>
+    <string name="rule_target_custom">手动输入…</string>
+
+    <string name="backup">备份与恢复</string>
+    <string name="backup_export">导出配置到本地文件</string>
+    <string name="backup_export_summary">覆写设置、自定义规则、按应用上网配置</string>
+    <string name="backup_import">从本地文件恢复</string>
+    <string name="backup_import_summary">选择之前导出的 .json 文件</string>
+    <string name="backup_export_success">已导出</string>
+    <string name="backup_export_failed">导出失败</string>
+    <string name="backup_import_success">已恢复，重新启动代理后生效</string>
+    <string name="backup_import_restoring">正在恢复订阅…</string>
+    <string name="backup_import_success_count">已恢复，重新下载了 %1$d 个订阅</string>
+    <string name="backup_import_failed">恢复失败，文件格式不正确</string>
+
+
+    <string name="access_control_route">出口策略组</string>
+    <string name="access_control_route_hint">策略组名称，留空则跟随规则匹配</string>
+    <string name="access_control_route_follow_rules">跟随规则匹配</string>
+    <string name="app_route_summary">%1$s → %2$s</string>
     <string name="sniffer_setting">嗅探设置</string>
     <string name="sniffer">嗅探器</string>
     <string name="sniff">嗅探</string>

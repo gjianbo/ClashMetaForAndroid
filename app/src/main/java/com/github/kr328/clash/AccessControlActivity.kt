@@ -13,6 +13,7 @@ import com.github.kr328.clash.design.util.toAppInfo
 import com.github.kr328.clash.service.store.ServiceStore
 import com.github.kr328.clash.util.startClashService
 import com.github.kr328.clash.util.stopClashService
+import com.github.kr328.clash.util.withClash
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -26,11 +27,18 @@ class AccessControlActivity : BaseActivity<AccessControlDesign>() {
         val selected = withContext(Dispatchers.IO) {
             service.accessControlPackages.toMutableSet()
         }
+        val routes = withContext(Dispatchers.IO) {
+            service.accessControlRoutes.orEmpty().toMutableMap()
+        }
 
         defer {
             withContext(Dispatchers.IO) {
-                val changed = selected != service.accessControlPackages
+                val changed = selected != service.accessControlPackages ||
+                        routes != service.accessControlRoutes.orEmpty()
+
                 service.accessControlPackages = selected
+                service.accessControlRoutes = routes.ifEmpty { null }
+
                 if (clashRunning && changed) {
                     stopClashService()
                     while (clashRunning) {
@@ -41,7 +49,7 @@ class AccessControlActivity : BaseActivity<AccessControlDesign>() {
             }
         }
 
-        val design = AccessControlDesign(this, uiStore, selected)
+        val design = AccessControlDesign(this, uiStore, selected, routes)
 
         setContentDesign(design)
 
@@ -110,6 +118,24 @@ class AccessControlActivity : BaseActivity<AccessControlDesign>() {
                             )
 
                             clipboard?.setPrimaryClip(data)
+                        }
+
+                        is AccessControlDesign.Request.SelectRoute -> {
+                            val groups = runCatching {
+                                withClash { queryProxyGroupNames(excludeNotSelectable = false) }
+                            }.getOrElse { emptyList() }
+
+                            val picked = design.requestSelectRoute(routes[it.packageName], groups)
+
+                            if (picked != null) {
+                                if (picked.isEmpty()) {
+                                    routes.remove(it.packageName)
+                                } else {
+                                    routes[it.packageName] = picked
+                                }
+
+                                design.rebindAll()
+                            }
                         }
                     }
                 }

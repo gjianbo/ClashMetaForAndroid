@@ -5,6 +5,7 @@ import android.os.Parcelable
 import com.github.kr328.clash.core.util.Parcelizer
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
 
 @Serializable
 data class ConfigurationOverride(
@@ -67,6 +68,16 @@ data class ConfigurationOverride(
 
     @SerialName("find-process-mode")
     var findProcessMode: FindProcessMode? = null,
+
+    /**
+     * 手动追加到 profile 规则最前面的规则行。
+     *
+     * 注意不能复用 [com.github.kr328.clash.core.model.ConfigurationOverride] 对应的 `rule` 字段：
+     * 内核把整个 override 文档 decode 进 RawConfig，而 json 对 slice 是替换语义，
+     * 写 `rule` 会把订阅自身的规则全部冲掉。因此单独开一个键，由内核侧做前置合并。
+     */
+    @SerialName("prepend-rules")
+    var prependRules: List<String>? = null,
 
     @SerialName("dns")
     val dns: Dns = Dns(),
@@ -288,6 +299,19 @@ data class ConfigurationOverride(
     }
 
     companion object CREATOR : Parcelable.Creator<ConfigurationOverride> {
+        private val backupJson = Json {
+            encodeDefaults = false
+            ignoreUnknownKeys = true
+        }
+
+        /** 供本地备份使用：把覆写设置序列化成 JSON 文本。 */
+        fun toJsonString(configuration: ConfigurationOverride): String =
+            backupJson.encodeToString(serializer(), configuration)
+
+        /** 供本地备份恢复使用：解析失败返回 null。 */
+        fun fromJsonString(json: String): ConfigurationOverride? =
+            runCatching { backupJson.decodeFromString(serializer(), json) }.getOrNull()
+
         override fun createFromParcel(parcel: Parcel): ConfigurationOverride {
             return Parcelizer.decodeFromParcel(serializer(), parcel)
         }
