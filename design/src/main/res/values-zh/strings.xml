@@ -284,6 +284,7 @@
     <string name="rule_type_domain">域名完全匹配</string>
     <string name="rule_type_domain_suffix">域名后缀</string>
     <string name="rule_type_domain_keyword">域名关键字</string>
+    <string name="rule_type_geosite">域名分类 (GeoSite)</string>
     <string name="rule_type_process_name">应用</string>
     <string name="rule_type_ip_cidr">IP 段</string>
     <string name="rule_target_auto">AUTO · 跟随当前订阅</string>

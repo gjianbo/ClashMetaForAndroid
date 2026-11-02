@@ -67,6 +67,7 @@ enum class RuleType(
     Domain("DOMAIN", R.string.rule_type_domain),
     DomainSuffix("DOMAIN-SUFFIX", R.string.rule_type_domain_suffix),
     DomainKeyword("DOMAIN-KEYWORD", R.string.rule_type_domain_keyword),
+    Geosite("GEOSITE", R.string.rule_type_geosite),
     ProcessName("PROCESS-NAME", R.string.rule_type_process_name, needsApp = true),
     IpCidr("IP-CIDR", R.string.rule_type_ip_cidr),
     ;

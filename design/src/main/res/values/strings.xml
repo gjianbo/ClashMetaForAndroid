@@ -363,6 +363,7 @@
     <string name="rule_type_domain">Domain</string>
     <string name="rule_type_domain_suffix">Domain suffix</string>
     <string name="rule_type_domain_keyword">Domain keyword</string>
+    <string name="rule_type_geosite">GeoSite</string>
     <string name="rule_type_process_name">Application</string>
     <string name="rule_type_ip_cidr">IP CIDR</string>
     <string name="rule_target_auto">AUTO · follow current profile</string>

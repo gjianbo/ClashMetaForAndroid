@@ -20,7 +20,7 @@
 
 | 文件 | 作用 |
 |---|---|
-| `0001-tailscale-status-api.patch` | 给 `adapter/outbound/tailscale.go` 加 `Status()` / `Ping()` 方法与实例注册表 `LookupTailscale()`，供 Tailscale 状态页读取 tsnet 的节点、延迟、连接方式 |
+| `0001-tailscale-status-api.patch` | 改动 `adapter/outbound/tailscale.go`：① 加 `Status()` / `Ping()` 方法与实例注册表 `LookupTailscale()`，供状态页读取 tsnet 节点、延迟、连接方式；② 启动失败可重试（去掉 `sync.Once` 的永久错误缓存）；③ 看门狗自动重建实例，解决"换网/换节点后必须重启 VPN" |
 
 ## 自动应用
 

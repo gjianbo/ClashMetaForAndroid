@@ -1,5 +1,5 @@
 diff --git a/adapter/outbound/tailscale.go b/adapter/outbound/tailscale.go
-index 2d487da5..c1ca5308 100644
+index 2d487da5..cfdb8be3 100644
 --- a/adapter/outbound/tailscale.go
 +++ b/adapter/outbound/tailscale.go
 @@ -11,6 +11,7 @@ import (
@@ -18,16 +18,91 @@ index 2d487da5..c1ca5308 100644
  	"github.com/metacubex/tailscale/net/netmon"
  	"github.com/metacubex/tailscale/tailcfg"
  	"github.com/metacubex/tailscale/tsnet"
-@@ -49,6 +51,8 @@ type Tailscale struct {
- 	serverStarted bool
+@@ -32,23 +34,76 @@ import (
+ 	"github.com/samber/lo"
+ )
  
- 	unregisterDNSResolver func()
++const (
++	// 启动失败后的最小重试间隔，避免每个请求都触发一次完整启动。
++	tailscaleStartRetryInterval = 5 * time.Second
++	// applyPrefs 的超时。超时不再判定为致命错误，tsnet 仍然可用。
++	tailscaleStartTimeout = 30 * time.Second
++	// 看门狗巡检间隔。
++	tailscaleWatchdogInterval = 15 * time.Second
++	// 连续多少个巡检周期异常才重建实例。
++	tailscaleWatchdogThreshold = 2
++	// 重建后退避，避免网络长时间不可用时反复重建。
++	tailscaleWatchdogMinBackoff = 30 * time.Second
++	tailscaleWatchdogMaxBackoff = 5 * time.Minute
++	// 查询后端状态的超时。
++	tailscaleStatusTimeout = 10 * time.Second
++)
++
++// backendInit 表示一次启动尝试的「后端就绪」信号。
++// 每次重启都会换一个新的实例，避免旧的 watcher 失败污染新一轮启动。
++type backendInit struct {
++	ch   chan struct{}
++	once sync.Once
++	err  error
++}
++
++func newBackendInit() *backendInit {
++	return &backendInit{ch: make(chan struct{})}
++}
++
++func (b *backendInit) set(err error) {
++	b.once.Do(func() {
++		b.err = err
++		close(b.ch)
++	})
++}
++
++// hasErr 只在信号已经关闭（happens-before 保证）时才读 err，避免数据竞争。
++func (b *backendInit) hasErr() bool {
++	select {
++	case <-b.ch:
++		return b.err != nil
++	default:
++		return false
++	}
++}
++
+ type Tailscale struct {
+ 	*Base
+-	server      *tsnet.Server
++	server      atomic.Pointer[tsnet.Server]
+ 	dnsResolver *dns.Resolver
+ 	option      TailscaleOption
+ 	ctx         context.Context
+ 	cancel      context.CancelFunc
+-	startOnce   sync.Once
+-	startErr    error
+ 
+-	backendInitOnce sync.Once
+-	backendInitCh   chan struct{}
+-	backendInitErr  error
++	unregisterDNSResolver func()
 +
 +	closed atomic.Bool
+ 
++	// startMu 守护启动/重建状态机。这里刻意不用 sync.Once：
++	// 切网瞬间的一次瞬时失败（例如 applyPrefs 超时）不应该让整个 outbound 永久作废，
++	// 旧实现把 startErr 永久缓存，导致只能重启 VPN 才能恢复。
++	startMu       sync.Mutex
+ 	serverStarted bool
++	startErr      error
++	startAttempt  time.Time
++	attemptCancel context.CancelFunc
++	backend       *backendInit
+ 
+-	unregisterDNSResolver func()
++	prefsApplied atomic.Bool
++
++	watchdogOnce sync.Once
  }
  
  type TailscaleOption struct {
-@@ -66,9 +70,29 @@ type TailscaleOption struct {
+@@ -66,6 +121,27 @@ type TailscaleOption struct {
  	ExitNodeAllowLANAccess *bool  `proxy:"exit-node-allow-lan-access,omitempty"`
  }
  
@@ -53,13 +128,9 @@ index 2d487da5..c1ca5308 100644
 +}
 +
  func init() {
--	hostinfo.RegisterHostinfoNewHook(func(hi *tailcfg.Hostinfo) {
--		versionDotTxt := strings.TrimSpace(ts.VersionDotTxt)
-+	hostinfo.RegisterHostinfoNewHook(func(hi *tailcfg.Hostinfo) {		versionDotTxt := strings.TrimSpace(ts.VersionDotTxt)
- 		hi.IPNVersion = fmt.Sprintf("%s-%s-%s", versionDotTxt, C.MihomoName, C.Version)
- 	})
- 	envknob.SetNoLogsNoSupport()
-@@ -115,6 +139,16 @@ func NewTailscale(option TailscaleOption) (*Tailscale, error) {
+ 	hostinfo.RegisterHostinfoNewHook(func(hi *tailcfg.Hostinfo) {
+ 		versionDotTxt := strings.TrimSpace(ts.VersionDotTxt)
+@@ -115,6 +191,16 @@ func NewTailscale(option TailscaleOption) (*Tailscale, error) {
  	if _, err := buildTailscaleMaskedPrefs(option); err != nil {
  		return nil, err
  	}
@@ -76,15 +147,479 @@ index 2d487da5..c1ca5308 100644
  	if option.StateDir == "" {
  		option.StateDir = "tailscale"
  	}
-@@ -180,6 +214,7 @@ func NewTailscale(option TailscaleOption) (*Tailscale, error) {
- 	dnsTransport := tailscaleDNSTransport{tailscale: outbound}
- 	outbound.dnsResolver = dns.NewResolverFromClient(dnsTransport)
- 	outbound.unregisterDNSResolver = dns.RegisterTailscaleDnsClient(option.Name, dnsTransport)
+@@ -139,68 +225,161 @@ func NewTailscale(option TailscaleOption) (*Tailscale, error) {
+ 			RoutingMark:  option.RoutingMark,
+ 			Prefer:       option.IPVersion,
+ 		}),
+-		option:        option,
+-		ctx:           ctx,
+-		cancel:        cancel,
+-		backendInitCh: make(chan struct{}),
++		option: option,
++		ctx:    ctx,
++		cancel: cancel,
+ 	}
+ 	outbound.dialer = option.NewDialer(outbound.DialOptions())
+-	outbound.server = &tsnet.Server{
+-		Dir:        option.StateDir,
+-		Hostname:   option.Hostname,
+-		AuthKey:    option.AuthKey,
+-		ControlURL: option.ControlURL,
+-		Ephemeral:  option.Ephemeral,
++	outbound.server.Store(outbound.newServer())
++	dnsTransport := tailscaleDNSTransport{tailscale: outbound}
++	outbound.dnsResolver = dns.NewResolverFromClient(dnsTransport)
++	outbound.unregisterDNSResolver = dns.RegisterTailscaleDnsClient(option.Name, dnsTransport)
 +	tailscaleRegistry.Store(option.Name, outbound)
- 	return outbound, nil
++	return outbound, nil
++}
++
++// newServer 每次都构造一个全新的 tsnet.Server。
++// tsnet.Server 的 Start 只能成功调用一次，重建实例时必须换新对象（Dir 不变，登录态在磁盘上）。
++func (t *Tailscale) newServer() *tsnet.Server {
++	return &tsnet.Server{
++		Dir:        t.option.StateDir,
++		Hostname:   t.option.Hostname,
++		AuthKey:    t.option.AuthKey,
++		ControlURL: t.option.ControlURL,
++		Ephemeral:  t.option.Ephemeral,
+ 		SystemDialer: func(ctx context.Context, network, address string) (net.Conn, error) {
+-			log.Debugln("[Tailscale](%s) SystemDialer: start dial %s %s", option.Name, network, address)
+-			conn, err := outbound.dialer.DialContext(ctx, network, address)
+-			log.Debugln("[Tailscale](%s) SystemDialer: finish dial %s %s, err: %v", option.Name, network, address, err)
++			log.Debugln("[Tailscale](%s) SystemDialer: start dial %s %s", t.option.Name, network, address)
++			conn, err := t.dialer.DialContext(ctx, network, address)
++			log.Debugln("[Tailscale](%s) SystemDialer: finish dial %s %s, err: %v", t.option.Name, network, address, err)
+ 			return conn, err
+ 		},
+ 		SystemPacketListener: func(ctx context.Context, network, address string) (net.PacketConn, error) {
+-			log.Debugln("[Tailscale](%s) SystemPacketListener: start listen %s %s", option.Name, network, address)
+-			pc, err := outbound.dialer.ListenPacket(ctx, network, address, netip.AddrPort{})
+-			log.Debugln("[Tailscale](%s) SystemPacketListener: finish listen %s %s, err: %v", option.Name, network, address, err)
++			log.Debugln("[Tailscale](%s) SystemPacketListener: start listen %s %s", t.option.Name, network, address)
++			pc, err := t.dialer.ListenPacket(ctx, network, address, netip.AddrPort{})
++			log.Debugln("[Tailscale](%s) SystemPacketListener: finish listen %s %s, err: %v", t.option.Name, network, address, err)
+ 			return pc, err
+ 		},
+ 		ExtraRootCAs: ca.GetCertPool(),
+ 		LookupHook: func(ctx context.Context, host string) ([]netip.Addr, error) {
+-			log.Debugln("[Tailscale](%s) LookupHook: start lookup %s", option.Name, host)
++			log.Debugln("[Tailscale](%s) LookupHook: start lookup %s", t.option.Name, host)
+ 			ips, err := resolver.LookupIPWithResolver(ctx, host, resolver.ProxyServerHostResolver)
+-			log.Debugln("[Tailscale](%s) LookupHook: finish lookup %s, ips: %v, err: %v", option.Name, host, ips, err)
++			log.Debugln("[Tailscale](%s) LookupHook: finish lookup %s, ips: %v, err: %v", t.option.Name, host, ips, err)
+ 			return ips, err
+ 		},
+ 		UserLogf: func(format string, args ...any) {
+-			log.Infoln("[Tailscale](%s) %s", option.Name, fmt.Sprintf(format, args...))
++			log.Infoln("[Tailscale](%s) %s", t.option.Name, fmt.Sprintf(format, args...))
+ 		},
+ 		Logf: func(format string, args ...any) {
+-			log.Debugln("[Tailscale](%s) %s", option.Name, fmt.Sprintf(format, args...))
++			log.Debugln("[Tailscale](%s) %s", t.option.Name, fmt.Sprintf(format, args...))
+ 		},
+ 	}
+-	dnsTransport := tailscaleDNSTransport{tailscale: outbound}
+-	outbound.dnsResolver = dns.NewResolverFromClient(dnsTransport)
+-	outbound.unregisterDNSResolver = dns.RegisterTailscaleDnsClient(option.Name, dnsTransport)
+-	return outbound, nil
++}
++
++func (t *Tailscale) currentServer() *tsnet.Server {
++	return t.server.Load()
++}
++
++func (t *Tailscale) started() bool {
++	t.startMu.Lock()
++	defer t.startMu.Unlock()
++	return t.serverStarted
  }
  
-@@ -465,7 +500,12 @@ func (t *Tailscale) IsL3Protocol(metadata *C.Metadata) bool {
+ func (t *Tailscale) start() error {
+-	t.startOnce.Do(func() {
+-		if err := t.server.Start(); err != nil {
+-			t.startErr = err
+-			t.setBackendInitialized(err)
+-			return
+-		}
+-		t.serverStarted = true
+-		ctx, cancel := context.WithTimeout(t.ctx, 30*time.Second)
+-		defer cancel()
+-		if err := t.applyPrefs(ctx); err != nil {
+-			t.startErr = err
+-			t.setBackendInitialized(err)
+-			return
++	if t.closed.Load() {
++		return errors.New("tailscale outbound closed")
++	}
++
++	t.startMu.Lock()
++
++	if t.serverStarted {
++		if t.backend != nil && t.backend.hasErr() {
++			// 上一轮的 backend watcher 已经失败，实例不可用，直接重建。
++			log.Warnln("[Tailscale](%s) backend watcher failed, rebuilding: %v", t.option.Name, t.backend.err)
++			t.teardownLocked()
++		} else {
++			t.startMu.Unlock()
++			return nil
+ 		}
+-		go t.watchBackendState()
+-	})
+-	return t.startErr
++	}
++
++	// 上次启动失败后短时间内不重试，避免流量在故障期把启动风暴放大。
++	if t.startErr != nil && time.Since(t.startAttempt) < tailscaleStartRetryInterval {
++		err := t.startErr
++		t.startMu.Unlock()
++		return err
++	}
++	t.startAttempt = time.Now()
++
++	srv := t.currentServer()
++	if srv == nil {
++		srv = t.newServer()
++		t.server.Store(srv)
++	}
++	if err := srv.Start(); err != nil {
++		// 启动失败的 Server 不再复用，下次重试时构造新实例。
++		t.server.Store(nil)
++		t.startErr = err
++		t.startMu.Unlock()
++		log.Warnln("[Tailscale](%s) start failed, will retry: %v", t.option.Name, err)
++		return err
++	}
++
++	t.serverStarted = true
++	t.startErr = nil
++
++	attemptCtx, attemptCancel := context.WithCancel(t.ctx)
++	t.attemptCancel = attemptCancel
++	init := newBackendInit()
++	t.backend = init
++	go t.watchBackendState(attemptCtx, srv, init)
++
++	t.startMu.Unlock()
++
++	// applyPrefs 放在锁外：它可能耗时 30s，不该阻塞 Close / 其他拨号。
++	// 失败也不再判死整个实例——tsnet 已经跑起来了，prefs 交给看门狗补齐。
++	ctx, cancel := context.WithTimeout(t.ctx, tailscaleStartTimeout)
++	defer cancel()
++	if err := t.applyPrefs(ctx); err != nil {
++		log.Warnln("[Tailscale](%s) apply prefs failed, will retry: %v", t.option.Name, err)
++	}
++
++	t.startWatchdog()
++
++	return nil
++}
++
++// teardownLocked 关掉当前 tsnet 实例，调用方必须持有 startMu。
++// tsnet.Server.Close 不允许和 Start 并发，所以这整个动作必须串行化。
++func (t *Tailscale) teardownLocked() error {
++	if t.attemptCancel != nil {
++		t.attemptCancel()
++		t.attemptCancel = nil
++	}
++	srv := t.server.Swap(nil)
++	t.serverStarted = false
++	t.backend = nil
++	if srv != nil {
++		return srv.Close()
++	}
++	return nil
++}
++
++func (t *Tailscale) restart(reason string) error {
++	t.startMu.Lock()
++	if t.closed.Load() {
++		t.startMu.Unlock()
++		return errors.New("tailscale outbound closed")
++	}
++	log.Warnln("[Tailscale](%s) rebuilding instance: %s", t.option.Name, reason)
++	t.teardownLocked()
++	t.startErr = nil
++	t.startAttempt = time.Time{}
++	t.startMu.Unlock()
++
++	t.prefsApplied.Store(false)
++
++	return t.start()
+ }
+ 
+ func (t *Tailscale) ensureStarted(ctx context.Context) error {
+@@ -210,15 +389,17 @@ func (t *Tailscale) ensureStarted(ctx context.Context) error {
+ 	return t.waitBackendInitialized(ctx)
+ }
+ 
+-func (t *Tailscale) watchBackendState() {
+-	lc, err := t.server.LocalClient()
++// watchBackendState 只负责把「后端是否已经跨过初始 NoState」这个信号发出去。
++// 它不再是失败后的唯一裁判：持续健康由 startWatchdog 巡检。
++func (t *Tailscale) watchBackendState(ctx context.Context, srv *tsnet.Server, init *backendInit) {
++	lc, err := srv.LocalClient()
+ 	if err != nil {
+-		t.setBackendInitialized(err)
++		init.set(err)
+ 		return
+ 	}
+-	watcher, err := lc.WatchIPNBus(t.ctx, ipn.NotifyInitialState)
++	watcher, err := lc.WatchIPNBus(ctx, ipn.NotifyInitialState)
+ 	if err != nil {
+-		t.setBackendInitialized(err)
++		init.set(err)
+ 		return
+ 	}
+ 	defer watcher.Close()
+@@ -228,7 +409,7 @@ func (t *Tailscale) watchBackendState() {
+ 	for {
+ 		n, err := watcher.Next()
+ 		if err != nil {
+-			t.setBackendInitialized(err)
++			init.set(err)
+ 			return
+ 		}
+ 		if n.State == nil {
+@@ -236,14 +417,14 @@ func (t *Tailscale) watchBackendState() {
+ 		}
+ 
+ 		if *n.State != ipn.NoState && !backendInitialized {
+-			t.setBackendInitialized(nil)
++			init.set(nil)
+ 			backendInitialized = true
+ 			if !exitNodeNeedsStatus {
+ 				return
+ 			}
+ 		}
+ 		if exitNodeNeedsStatus && *n.State == ipn.Running {
+-			if err := t.applyExitNodePrefs(t.ctx); err != nil {
++			if err := t.applyExitNodePrefs(ctx); err != nil {
+ 				log.Warnln("[Tailscale](%s) set exit node failed: %v", t.Name(), err)
+ 			}
+ 			return
+@@ -251,17 +432,18 @@ func (t *Tailscale) watchBackendState() {
+ 	}
+ }
+ 
+-func (t *Tailscale) setBackendInitialized(err error) {
+-	t.backendInitOnce.Do(func() {
+-		t.backendInitErr = err
+-		close(t.backendInitCh)
+-	})
+-}
+-
+ func (t *Tailscale) waitBackendInitialized(ctx context.Context) error {
++	t.startMu.Lock()
++	init := t.backend
++	t.startMu.Unlock()
++
++	if init == nil {
++		return errors.New("tailscale backend not initialized")
++	}
++
+ 	select {
+-	case <-t.backendInitCh:
+-		return t.backendInitErr
++	case <-init.ch:
++		return init.err
+ 	case <-ctx.Done():
+ 		return ctx.Err()
+ 	case <-t.ctx.Done():
+@@ -269,27 +451,138 @@ func (t *Tailscale) waitBackendInitialized(ctx context.Context) error {
+ 	}
+ }
+ 
++// backendState 读一次当前后端状态，供看门狗判断是否需要重建。
++func (t *Tailscale) backendState() (string, error) {
++	srv := t.currentServer()
++	if srv == nil || !t.started() {
++		return "", errors.New("tailscale not started")
++	}
++	lc, err := srv.LocalClient()
++	if err != nil {
++		return "", err
++	}
++	ctx, cancel := context.WithTimeout(t.ctx, tailscaleStatusTimeout)
++	defer cancel()
++	st, err := lc.Status(ctx)
++	if err != nil {
++		return "", err
++	}
++	return st.BackendState, nil
++}
++
++// startWatchdog 巡检后端健康度：连续多个周期非 Running（且不是等待登录）就重建实例。
++// 这是解决「换网/换节点后必须手动点一下才恢复」的核心：以前没有任何人负责拉起。
++func (t *Tailscale) startWatchdog() {
++	t.watchdogOnce.Do(func() {
++		go func() {
++			ticker := time.NewTicker(tailscaleWatchdogInterval)
++			defer ticker.Stop()
++
++			badTicks := 0
++			var backoff time.Duration
++			var cooldownUntil time.Time
++			needLoginWarned := false
++
++			for {
++				select {
++				case <-t.ctx.Done():
++					return
++				case <-ticker.C:
++				}
++
++				state, err := t.backendState()
++				parsed, known := ipn.StateFromString(state)
++
++				if err == nil && known && parsed == ipn.Running {
++					badTicks = 0
++					backoff = 0
++					needLoginWarned = false
++					t.retryPrefsIfNeeded()
++					continue
++				}
++
++				if err == nil && known && parsed == ipn.NeedsLogin {
++					if !needLoginWarned {
++						log.Warnln("[Tailscale](%s) needs login, waiting for authorization", t.option.Name)
++						needLoginWarned = true
++					}
++					badTicks = 0
++					continue
++				}
++
++				badTicks++
++
++				if badTicks < tailscaleWatchdogThreshold {
++					continue
++				}
++				if time.Now().Before(cooldownUntil) {
++					continue
++				}
++
++				reason := fmt.Sprintf("backend state %q", state)
++				if err != nil {
++					reason = err.Error()
++				}
++				if rerr := t.restart(reason); rerr != nil {
++					log.Warnln("[Tailscale](%s) rebuild failed, will retry: %v", t.option.Name, rerr)
++				}
++
++				if backoff == 0 {
++					backoff = tailscaleWatchdogMinBackoff
++				} else if backoff *= 2; backoff > tailscaleWatchdogMaxBackoff {
++					backoff = tailscaleWatchdogMaxBackoff
++				}
++				cooldownUntil = time.Now().Add(backoff)
++				badTicks = 0
++			}
++		}()
++	})
++}
++
++func (t *Tailscale) retryPrefsIfNeeded() {
++	if t.prefsApplied.Load() {
++		return
++	}
++	ctx, cancel := context.WithTimeout(t.ctx, tailscaleStatusTimeout)
++	defer cancel()
++	if err := t.applyPrefs(ctx); err != nil {
++		log.Debugln("[Tailscale](%s) retry apply prefs failed: %v", t.option.Name, err)
++	}
++}
++
+ func (t *Tailscale) applyPrefs(ctx context.Context) error {
+ 	mp, err := buildTailscaleMaskedPrefs(t.option)
+ 	if err != nil {
+ 		return err
+ 	}
+ 	if mp == nil {
++		t.prefsApplied.Store(true)
+ 		return nil
+ 	}
+-	lc, err := t.server.LocalClient()
++	srv := t.currentServer()
++	if srv == nil {
++		return errors.New("tailscale server is nil")
++	}
++	lc, err := srv.LocalClient()
+ 	if err != nil {
+ 		return err
+ 	}
+-	_, err = lc.EditPrefs(ctx, mp)
+-	return err
++	if _, err = lc.EditPrefs(ctx, mp); err != nil {
++		return err
++	}
++	t.prefsApplied.Store(true)
++	return nil
+ }
+ 
+ func (t *Tailscale) applyExitNodePrefs(ctx context.Context) error {
+ 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+ 	defer cancel()
+ 
+-	lc, err := t.server.LocalClient()
++	srv := t.currentServer()
++	if srv == nil {
++		return errors.New("tailscale server is nil")
++	}
++	lc, err := srv.LocalClient()
+ 	if err != nil {
+ 		return err
+ 	}
+@@ -350,11 +643,15 @@ func (t *Tailscale) DialContext(ctx context.Context, metadata *C.Metadata) (_ C.
+ 	if err = t.ensureStarted(ctx); err != nil {
+ 		return nil, err
+ 	}
+-	netStack, err := t.server.Netstack(ctx)
++	srv := t.currentServer()
++	if srv == nil {
++		return nil, errors.New("tailscale server is nil")
++	}
++	netStack, err := srv.Netstack(ctx)
+ 	if err != nil {
+ 		return nil, err
+ 	}
+-	v4, v6 := t.server.TailscaleIPs()
++	v4, v6 := srv.TailscaleIPs()
+ 	options := t.DialOptions()
+ 	options = append(options, dialer.WithResolver(t.dnsResolver))
+ 	options = append(options, dialer.WithNetDialer(dialer.NetDialerFunc(func(ctx context.Context, network, address string) (net.Conn, error) {
+@@ -390,12 +687,16 @@ func (t *Tailscale) ListenPacketContext(ctx context.Context, metadata *C.Metadat
+ 	if err = t.ResolveUDP(ctx, metadata); err != nil {
+ 		return nil, err
+ 	}
+-	v4, v6 := t.server.TailscaleIPs()
++	srv := t.currentServer()
++	if srv == nil {
++		return nil, errors.New("tailscale server is nil")
++	}
++	v4, v6 := srv.TailscaleIPs()
+ 	src := v4
+ 	if metadata.DstIP.Is6() {
+ 		src = v6
+ 	}
+-	pc, err := t.server.ListenPacket("udp", net.JoinHostPort(src.String(), "0"))
++	pc, err := srv.ListenPacket("udp", net.JoinHostPort(src.String(), "0"))
+ 	if err != nil {
+ 		return nil, err
+ 	}
+@@ -438,7 +739,11 @@ func (t tailscaleDNSTransport) ExchangeContext(ctx context.Context, msg *D.Msg)
+ 	if !ok {
+ 		return nil, fmt.Errorf("unsupported query type: %d", q.Qtype)
+ 	}
+-	lc, err := t.tailscale.server.LocalClient()
++	srv := t.tailscale.currentServer()
++	if srv == nil {
++		return nil, errors.New("tailscale server is nil")
++	}
++	lc, err := srv.LocalClient()
+ 	if err != nil {
+ 		return nil, err
+ 	}
+@@ -465,15 +770,65 @@ func (t *Tailscale) IsL3Protocol(metadata *C.Metadata) bool {
  }
  
  func (t *Tailscale) Close() error {
@@ -97,23 +632,36 @@ index 2d487da5..c1ca5308 100644
  	if t.unregisterDNSResolver != nil {
  		t.unregisterDNSResolver()
  	}
-@@ -477,3 +517,41 @@ func (t *Tailscale) Close() error {
- 	}
- 	return nil
- }
+-	t.startOnce.Do(func() {
+-		t.startErr = errors.New("tailscale outbound closed")
+-	})
+-	if t.server != nil && t.serverStarted { // tsnet.Server.Close() must not be called before or concurrently with Start.
+-		return t.server.Close()
++
++	t.startMu.Lock()
++	err := t.teardownLocked()
++	t.startMu.Unlock()
++
++	return err
++}
 +
 +// Status reports the current tsnet state, including this node and all peers.
 +// It is used by the client to render a Tailscale status page.
 +func (t *Tailscale) Status(ctx context.Context) (*ipnstate.Status, error) {
 +	if t.closed.Load() {
 +		return nil, errors.New("tailscale outbound closed")
-+	}
+ 	}
+-	return nil
 +
 +	if err := t.ensureStarted(ctx); err != nil {
 +		return nil, err
 +	}
 +
-+	lc, err := t.server.LocalClient()
++	srv := t.currentServer()
++	if srv == nil {
++		return nil, errors.New("tailscale server is nil")
++	}
++	lc, err := srv.LocalClient()
 +	if err != nil {
 +		return nil, err
 +	}
@@ -132,10 +680,14 @@ index 2d487da5..c1ca5308 100644
 +		return nil, err
 +	}
 +
-+	lc, err := t.server.LocalClient()
++	srv := t.currentServer()
++	if srv == nil {
++		return nil, errors.New("tailscale server is nil")
++	}
++	lc, err := srv.LocalClient()
 +	if err != nil {
 +		return nil, err
 +	}
 +
 +	return lc.Ping(ctx, ip, tailcfg.PingDisco)
-+}
+ }
