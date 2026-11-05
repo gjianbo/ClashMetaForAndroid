@@ -1,5 +1,5 @@
 diff --git a/adapter/outbound/tailscale.go b/adapter/outbound/tailscale.go
-index 2d487da5..cfdb8be3 100644
+index 2d487da5..0d9efb25 100644
 --- a/adapter/outbound/tailscale.go
 +++ b/adapter/outbound/tailscale.go
 @@ -11,6 +11,7 @@ import (
@@ -147,7 +147,7 @@ index 2d487da5..cfdb8be3 100644
  	if option.StateDir == "" {
  		option.StateDir = "tailscale"
  	}
-@@ -139,68 +225,161 @@ func NewTailscale(option TailscaleOption) (*Tailscale, error) {
+@@ -139,68 +225,170 @@ func NewTailscale(option TailscaleOption) (*Tailscale, error) {
  			RoutingMark:  option.RoutingMark,
  			Prefer:       option.IPVersion,
  		}),
@@ -323,11 +323,20 @@ index 2d487da5..cfdb8be3 100644
 +		t.attemptCancel = nil
 +	}
 +	srv := t.server.Swap(nil)
++	// 先记下是否真的 Start 过，下面会把它清零。
++	wasStarted := t.serverStarted
 +	t.serverStarted = false
 +	t.backend = nil
-+	if srv != nil {
++
++	// tsnet.Server.Close 的注释写得很明确：「不能在 Start 之前调用」。
++	// 从未 Start 的实例内部字段尚未初始化，close() 会 nil 解引用直接 panic。
++	// 这条路径会被 mihomo 的 autoCloseProxyAdapter 从 GC 终结器（runFinalizers）
++	// 里调用，panic 无法 recover，整个 Go 进程被 abort ——
++	// 表现就是「一加载代理就崩」，且每次 GC 后必现。
++	if srv != nil && wasStarted {
 +		return srv.Close()
 +	}
++
 +	return nil
 +}
 +
@@ -349,7 +358,7 @@ index 2d487da5..cfdb8be3 100644
  }
  
  func (t *Tailscale) ensureStarted(ctx context.Context) error {
-@@ -210,15 +389,17 @@ func (t *Tailscale) ensureStarted(ctx context.Context) error {
+@@ -210,15 +398,17 @@ func (t *Tailscale) ensureStarted(ctx context.Context) error {
  	return t.waitBackendInitialized(ctx)
  }
  
@@ -372,7 +381,7 @@ index 2d487da5..cfdb8be3 100644
  		return
  	}
  	defer watcher.Close()
-@@ -228,7 +409,7 @@ func (t *Tailscale) watchBackendState() {
+@@ -228,7 +418,7 @@ func (t *Tailscale) watchBackendState() {
  	for {
  		n, err := watcher.Next()
  		if err != nil {
@@ -381,7 +390,7 @@ index 2d487da5..cfdb8be3 100644
  			return
  		}
  		if n.State == nil {
-@@ -236,14 +417,14 @@ func (t *Tailscale) watchBackendState() {
+@@ -236,14 +426,14 @@ func (t *Tailscale) watchBackendState() {
  		}
  
  		if *n.State != ipn.NoState && !backendInitialized {
@@ -398,7 +407,7 @@ index 2d487da5..cfdb8be3 100644
  				log.Warnln("[Tailscale](%s) set exit node failed: %v", t.Name(), err)
  			}
  			return
-@@ -251,17 +432,18 @@ func (t *Tailscale) watchBackendState() {
+@@ -251,17 +441,18 @@ func (t *Tailscale) watchBackendState() {
  	}
  }
  
@@ -426,7 +435,7 @@ index 2d487da5..cfdb8be3 100644
  	case <-ctx.Done():
  		return ctx.Err()
  	case <-t.ctx.Done():
-@@ -269,27 +451,138 @@ func (t *Tailscale) waitBackendInitialized(ctx context.Context) error {
+@@ -269,27 +460,138 @@ func (t *Tailscale) waitBackendInitialized(ctx context.Context) error {
  	}
  }
  
@@ -569,7 +578,7 @@ index 2d487da5..cfdb8be3 100644
  	if err != nil {
  		return err
  	}
-@@ -350,11 +643,15 @@ func (t *Tailscale) DialContext(ctx context.Context, metadata *C.Metadata) (_ C.
+@@ -350,11 +652,15 @@ func (t *Tailscale) DialContext(ctx context.Context, metadata *C.Metadata) (_ C.
  	if err = t.ensureStarted(ctx); err != nil {
  		return nil, err
  	}
@@ -587,7 +596,7 @@ index 2d487da5..cfdb8be3 100644
  	options := t.DialOptions()
  	options = append(options, dialer.WithResolver(t.dnsResolver))
  	options = append(options, dialer.WithNetDialer(dialer.NetDialerFunc(func(ctx context.Context, network, address string) (net.Conn, error) {
-@@ -390,12 +687,16 @@ func (t *Tailscale) ListenPacketContext(ctx context.Context, metadata *C.Metadat
+@@ -390,12 +696,16 @@ func (t *Tailscale) ListenPacketContext(ctx context.Context, metadata *C.Metadat
  	if err = t.ResolveUDP(ctx, metadata); err != nil {
  		return nil, err
  	}
@@ -606,7 +615,7 @@ index 2d487da5..cfdb8be3 100644
  	if err != nil {
  		return nil, err
  	}
-@@ -438,7 +739,11 @@ func (t tailscaleDNSTransport) ExchangeContext(ctx context.Context, msg *D.Msg)
+@@ -438,7 +748,11 @@ func (t tailscaleDNSTransport) ExchangeContext(ctx context.Context, msg *D.Msg)
  	if !ok {
  		return nil, fmt.Errorf("unsupported query type: %d", q.Qtype)
  	}
@@ -619,7 +628,7 @@ index 2d487da5..cfdb8be3 100644
  	if err != nil {
  		return nil, err
  	}
-@@ -465,15 +770,65 @@ func (t *Tailscale) IsL3Protocol(metadata *C.Metadata) bool {
+@@ -465,15 +779,65 @@ func (t *Tailscale) IsL3Protocol(metadata *C.Metadata) bool {
  }
  
  func (t *Tailscale) Close() error {
